@@ -1,0 +1,3290 @@
+main.dart file----------
+import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'screens/home_shell.dart';
+
+void main() {
+  runApp(const GalleryApp());
+}
+
+class GalleryApp extends StatelessWidget {
+  const GalleryApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Gallery',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: const PermissionGate(child: HomeShell()),
+    );
+  }
+}
+
+class PermissionGate extends StatefulWidget {
+  final Widget child;
+  const PermissionGate({super.key, required this.child});
+
+  @override
+  State<PermissionGate> createState() => _PermissionGateState();
+}
+
+class _PermissionGateState extends State<PermissionGate> {
+  @override
+  void initState() {
+    super.initState();
+    _requestPermissions();
+  }
+
+  Future<void> _requestPermissions() async {
+    await Permission.photos.request();
+    await Permission.storage.request();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
+  }
+}
+
+/// Asks for media permission, then shows the main shell.
+class PermissionGate extends StatefulWidget {
+  const PermissionGate({super.key});
+
+  @override
+  State<PermissionGate> createState() => _PermissionGateState();
+}
+
+class _PermissionGateState extends State<PermissionGate> {
+  PermissionState? _state;
+
+  @override
+  void initState() {
+    super.initState();
+    _request();
+  }
+
+  Future<void> _request() async {
+    final state = await PhotoManager.requestPermissionExtend(
+      requestOption: const PermissionRequestOption(
+        androidPermission: AndroidPermission(
+          type: RequestType.common,
+          mediaLocation: true,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _state = state);
+    if (state.hasAccess) {
+      GalleryScope.of(context, listen: false).load();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = _state;
+    if (state != null && state.hasAccess) return const HomeShell();
+
+    return Scaffold(
+      body: GradientBackground(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: state == null
+                ? const CircularProgressIndicator()
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.photo_library_outlined, size: 72),
+                      const SizedBox(height: 20),
+                      Text('Allow access to your photos',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Gallery needs permission to show the photos and videos on this phone. Nothing leaves your device.',
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 24),
+                      FilledButton(
+                        onPressed: _request,
+                        child: const Text('Allow access'),
+                      ),
+                      TextButton(
+                        onPressed: PhotoManager.openSetting,
+                        child: const Text('Open settings'),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+------------------------
+theme.dart file 
+
+import 'package:flutter/material.dart';
+
+/// Soft lavender "frosted glass" look inspired by the ColorOS gallery.
+class GalleryColors {
+  static const accent = Color(0xFF5A5FD8);
+
+  static List<Color> backgroundGradient(Brightness b) => b == Brightness.light
+      ? const [Color(0xFFF1EEFB), Color(0xFFDDE2FA), Color(0xFFE9E4F8)]
+      : const [Color(0xFF15151F), Color(0xFF1B1D2C), Color(0xFF17151F)];
+
+  static Color glass(Brightness b) => b == Brightness.light
+      ? Colors.white.withOpacity(0.55)
+      : Colors.white.withOpacity(0.08);
+
+  static Color glassBorder(Brightness b) => b == Brightness.light
+      ? Colors.white.withOpacity(0.7)
+      : Colors.white.withOpacity(0.12);
+
+  static Color subtle(Brightness b) => b == Brightness.light
+      ? const Color(0xFF8A8DA6)
+      : const Color(0xFF9A9CB4);
+}
+
+ThemeData buildTheme(Brightness brightness) {
+  final scheme = ColorScheme.fromSeed(
+    seedColor: GalleryColors.accent,
+    brightness: brightness,
+  );
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: scheme,
+    scaffoldBackgroundColor: Colors.transparent,
+    splashFactory: InkSparkle.splashFactory,
+    textTheme: Typography.material2021(platform: TargetPlatform.android)
+        .black
+        .apply(
+          bodyColor: brightness == Brightness.light
+              ? const Color(0xFF2B2D42)
+              : const Color(0xFFE8E8F2),
+          displayColor: brightness == Brightness.light
+              ? const Color(0xFF2B2D42)
+              : const Color(0xFFE8E8F2),
+        ),
+  );
+}
+
+/// Full-screen gradient used behind every page.
+class GradientBackground extends StatelessWidget {
+  const GradientBackground({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: GalleryColors.backgroundGradient(b),
+        ),
+      ),
+      child: child,
+    );
+  }
+}
+-----------------------------------
+galleryscope.dart
+import 'package:flutter/widgets.dart';
+
+import 'media_repository.dart';
+
+/// Makes the [MediaRepository] available to the widget tree and rebuilds
+/// dependants whenever it notifies.
+class GalleryScope extends InheritedNotifier<MediaRepository> {
+  const GalleryScope({super.key, required MediaRepository repo, required super.child})
+      : super(notifier: repo);
+
+  static MediaRepository of(BuildContext context, {bool listen = true}) {
+    final scope = listen
+        ? context.dependOnInheritedWidgetOfExactType<GalleryScope>()
+        : context.getInheritedWidgetOfExactType<GalleryScope>();
+    assert(scope != null, 'No GalleryScope found in context');
+    return scope!.notifier!;
+  }
+}
+---------------------------
+grouping.dart
+import 'package:intl/intl.dart';
+import 'package:photo_manager/photo_manager.dart';
+
+import '../widgets/common.dart';
+
+final _dayFmt = DateFormat('MMM d, yyyy');
+final _dayFmtThisYear = DateFormat('EEE, MMM d');
+final _monthFmt = DateFormat('MMMM yyyy');
+
+String dayLabel(DateTime d) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(d.year, d.month, d.day);
+  final diff = today.difference(day).inDays;
+  if (diff == 0) return 'Today';
+  if (diff == 1) return 'Yesterday';
+  return _dayFmt.format(d);
+}
+
+String dayLabelLong(DateTime d) {
+  final now = DateTime.now();
+  final s = dayLabel(d);
+  if (s == 'Today' || s == 'Yesterday') return s;
+  return d.year == now.year ? _dayFmtThisYear.format(d) : _dayFmt.format(d);
+}
+
+/// Assumes [assets] is sorted newest first.
+List<AssetGroup> groupByDay(List<AssetEntity> assets, {bool long = false}) {
+  final out = <AssetGroup>[];
+  DateTime? current;
+  List<AssetEntity>? bucket;
+  for (final a in assets) {
+    final d = a.createDateTime;
+    final key = DateTime(d.year, d.month, d.day);
+    if (key != current) {
+      current = key;
+      bucket = [];
+      out.add(AssetGroup(long ? dayLabelLong(d) : dayLabel(d), bucket));
+    }
+    bucket!.add(a);
+  }
+  return out;
+}
+
+List<AssetGroup> groupByMonth(List<AssetEntity> assets) {
+  final out = <AssetGroup>[];
+  DateTime? current;
+  List<AssetEntity>? bucket;
+  for (final a in assets) {
+    final d = a.createDateTime;
+    final key = DateTime(d.year, d.month);
+    if (key != current) {
+      current = key;
+      bucket = [];
+      out.add(AssetGroup(_monthFmt.format(d), bucket));
+    }
+    bucket!.add(a);
+  }
+  return [
+    for (final g in out) AssetGroup(g.title, g.assets, trailing: '${g.assets.length} items'),
+  ];
+}
+
+Map<int, List<AssetEntity>> groupByYear(List<AssetEntity> assets) {
+  final out = <int, List<AssetEntity>>{};
+  for (final a in assets) {
+    (out[a.createDateTime.year] ??= []).add(a);
+  }
+  return out;
+}
+
+String countLabel(List<AssetEntity> assets) {
+  final videos = assets.where((a) => a.type == AssetType.video).length;
+  final photos = assets.length - videos;
+  final parts = <String>[
+    if (photos > 0) '$photos photo${photos == 1 ? '' : 's'}',
+    if (videos > 0) '$videos video${videos == 1 ? '' : 's'}',
+  ];
+  return parts.isEmpty ? 'Empty' : parts.join(', ');
+}
+----------------------
+repository.dart
+import 'package:photo_manager/photo_manager.dart';
+
+class MediaRepository {
+  Future<List<AssetEntity>> getRecentImages({int page = 0, int size = 50}) async {
+    final PermissionState ps = await PhotoManager.requestPermissionExtend();
+    if (ps.isAuth) {
+      final List<AssetPathEntity> paths = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        hasAll: true,
+      );
+      
+      if (paths.isNotEmpty) {
+        final List<AssetEntity> media = await paths[0].getAssetListPaged(
+          page: page,
+          size: size,
+        );
+        return media;
+      }
+    }
+    return [];
+  }
+}
+
+/// Virtual collections shown under "Media types".
+enum MediaType { videos, gifs, screenshots, favorites, panoramas, recent }
+
+extension MediaTypeLabel on MediaType {
+  String get label => switch (this) {
+        MediaType.videos => 'Videos',
+        MediaType.gifs => 'GIF',
+        MediaType.screenshots => 'Screenshots',
+        MediaType.favorites => 'Favorites',
+        MediaType.panoramas => 'Panoramas',
+        MediaType.recent => 'Recently added',
+      };
+}
+
+/// Single source of truth for everything the UI shows.
+class MediaRepository extends ChangeNotifier {
+  MediaRepository() {
+    scanner = SmartScanner(this);
+  }
+
+  late final SmartScanner scanner;
+
+  bool loading = false;
+  bool loaded = false;
+  List<AssetEntity> all = const [];
+  List<AlbumInfo> albums = const [];
+
+  /// asset id -> album name (used by search).
+  final Map<String, String> _albumOf = {};
+  Set<String> _favorites = {};
+  List<Memory>? _memories;
+  Timer? _reloadDebounce;
+  bool _listening = false;
+
+  // ---------------------------------------------------------------- loading
+
+  Future<void> load() async {
+    if (loading) return;
+    loading = true;
+    notifyListeners();
+
+    final prefs = await SharedPreferences.getInstance();
+    _favorites = (prefs.getStringList('favorites') ?? const []).toSet();
+
+    final filter = FilterOptionGroup(
+      orders: [const OrderOption(type: OrderOptionType.createDate, asc: false)],
+    );
+    final paths = await PhotoManager.getAssetPathList(
+      type: RequestType.common,
+      hasAll: true,
+      filterOption: filter,
+    );
+
+    final allAssets = <AssetEntity>[];
+    final albumList = <AlbumInfo>[];
+    _albumOf.clear();
+
+    for (final path in paths) {
+      final assets = await _readAll(path);
+      if (path.isAll) {
+        allAssets.addAll(assets);
+      } else if (assets.isNotEmpty) {
+        albumList.add(AlbumInfo(id: path.id, name: path.name, assets: assets));
+        for (final a in assets) {
+          _albumOf[a.id] = path.name;
+        }
+      }
+    }
+
+    // Biggest albums first, but keep the camera roll on top like ColorOS.
+    albumList.sort((a, b) {
+      final ac = _isCamera(a.name), bc = _isCamera(b.name);
+      if (ac != bc) return ac ? -1 : 1;
+      return b.count.compareTo(a.count);
+    });
+
+    all = allAssets;
+    albums = albumList;
+    _memories = null;
+    loading = false;
+    loaded = true;
+    notifyListeners();
+
+    _listenForChanges();
+    unawaited(scanner.start());
+  }
+
+  Future<List<AssetEntity>> _readAll(AssetPathEntity path) async {
+    final total = await path.assetCountAsync;
+    const page = 1000;
+    final out = <AssetEntity>[];
+    for (var start = 0; start < total; start += page) {
+      final end = (start + page).clamp(0, total);
+      out.addAll(await path.getAssetListRange(start: start, end: end));
+    }
+    return out;
+  }
+
+  void _listenForChanges() {
+    if (_listening) return;
+    _listening = true;
+    PhotoManager.addChangeCallback(_onMediaChanged);
+    PhotoManager.startChangeNotify();
+  }
+
+  void _onMediaChanged(MethodCall _) {
+    _reloadDebounce?.cancel();
+    _reloadDebounce = Timer(const Duration(seconds: 1), () {
+      loading = false;
+      load();
+    });
+  }
+
+  static bool _isCamera(String name) {
+    final n = name.toLowerCase();
+    return n == 'camera' || n == 'dcim';
+  }
+
+  // ------------------------------------------------------------- favorites
+
+  bool isFavorite(AssetEntity a) => _favorites.contains(a.id);
+
+  Future<void> toggleFavorite(AssetEntity a) async {
+    if (!_favorites.remove(a.id)) _favorites.add(a.id);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('favorites', _favorites.toList());
+  }
+
+  // ---------------------------------------------------------------- delete
+
+  /// Deletes from the device. Android 11+ shows the system confirmation.
+  Future<bool> delete(List<AssetEntity> items) async {
+    final ids = items.map((e) => e.id).toList();
+    final deleted = (await PhotoManager.editor.deleteWithIds(ids)).toSet();
+    if (deleted.isEmpty) return false;
+    all = all.where((a) => !deleted.contains(a.id)).toList();
+    albums = [
+      for (final al in albums)
+        AlbumInfo(
+          id: al.id,
+          name: al.name,
+          assets: al.assets.where((a) => !deleted.contains(a.id)).toList(),
+        ),
+    ].where((al) => al.count > 0).toList();
+    _favorites.removeAll(deleted);
+    _memories = null;
+    notifyListeners();
+    return true;
+  }
+
+  // ------------------------------------------------------------ media types
+
+  String? albumNameOf(AssetEntity a) => _albumOf[a.id];
+
+  static bool isGif(AssetEntity a) =>
+      (a.mimeType?.toLowerCase() == 'image/gif') ||
+      (a.title?.toLowerCase().endsWith('.gif') ?? false);
+
+  bool _isScreenshot(AssetEntity a) {
+    final album = _albumOf[a.id]?.toLowerCase() ?? '';
+    final title = a.title?.toLowerCase() ?? '';
+    return album.contains('screenshot') || title.startsWith('screenshot');
+  }
+
+  static bool _isPanorama(AssetEntity a) {
+    if (a.type != AssetType.image || a.width == 0 || a.height == 0) return false;
+    final r = a.width / a.height;
+    return r >= 2.2 || (r <= 1 / 2.2 && a.height > 4000);
+  }
+
+  List<AssetEntity> mediaType(MediaType t) => switch (t) {
+        MediaType.videos => all.where((a) => a.type == AssetType.video).toList(),
+        MediaType.gifs => all.where(isGif).toList(),
+        MediaType.screenshots => all.where(_isScreenshot).toList(),
+        MediaType.favorites => all.where(isFavorite).toList(),
+        MediaType.panoramas => all.where(_isPanorama).toList(),
+        MediaType.recent => all
+            .where((a) => DateTime.now().difference(a.createDateTime).inDays <= 30)
+            .toList(),
+      };
+
+  // -------------------------------------------------------------- memories
+
+  List<Memory> get memories =>
+      _memories ??= buildMemories(all, faceScore: scanner.faceCount);
+
+  void invalidateMemories() {
+    _memories = null;
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------- search
+
+  static final _monthFmt = DateFormat('MMMM yyyy');
+  static final _dayFmt = DateFormat('d MMMM yyyy');
+  static final _shortMonth = DateFormat('MMM');
+  static final _weekday = DateFormat('EEEE');
+
+  /// Matches file names, album names, dates ("sep 2024", "2025", "monday"),
+  /// place names and smart tags.
+  List<AssetEntity> search(String raw) {
+    final terms = raw.toLowerCase().trim().split(RegExp(r'\s+'))
+      ..removeWhere((t) => t.isEmpty);
+    if (terms.isEmpty) return const [];
+
+    return all.where((a) {
+      final d = a.createDateTime;
+      final haystack = StringBuffer()
+        ..write(a.title ?? '')
+        ..write(' ')
+        ..write(_albumOf[a.id] ?? '')
+        ..write(' ')
+        ..write(_monthFmt.format(d))
+        ..write(' ')
+        ..write(_dayFmt.format(d))
+        ..write(' ')
+        ..write(_shortMonth.format(d))
+        ..write(' ')
+        ..write(_weekday.format(d))
+        ..write(' ')
+        ..write(a.type == AssetType.video ? 'video videos' : 'photo photos image')
+        ..write(' ')
+        ..write(scanner.placeNameOf(a.id) ?? '')
+        ..write(' ')
+        ..write(scanner.tagsOf(a.id).join(' '))
+        ..write(isFavorite(a) ? ' favorite favourites' : '');
+      final h = haystack.toString().toLowerCase();
+      return terms.every(h.contains);
+    }).toList();
+  }
+
+  @override
+  void dispose() {
+    _reloadDebounce?.cancel();
+    if (_listening) {
+      PhotoManager.removeChangeCallback(_onMediaChanged);
+      PhotoManager.stopChangeNotify();
+    }
+    scanner.dispose();
+    super.dispose();
+  }
+}
+-----------------------------------------------
+memories.dart
+import 'package:intl/intl.dart';
+import 'package:photo_manager/photo_manager.dart';
+
+/// An auto-generated story such as "Two weeks in review – September 2026".
+class Memory {
+  Memory({
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    required this.assets,
+    required this.cover,
+    required this.start,
+  });
+
+  final String id;
+  final String title;
+  final String subtitle;
+  final List<AssetEntity> assets;
+  final AssetEntity cover;
+  final DateTime start;
+}
+
+/// Groups the library into half-month windows ("Two weeks in review") and
+/// adds an "On this day" memory when older photos share today's date.
+List<Memory> buildMemories(
+  List<AssetEntity> all, {
+  required int Function(String id) faceScore,
+  int minPhotos = 6,
+}) {
+  final monthFmt = DateFormat('MMMM yyyy');
+  final windows = <DateTime, List<AssetEntity>>{};
+  for (final a in all) {
+    final d = a.createDateTime;
+    final start = DateTime(d.year, d.month, d.day <= 14 ? 1 : 15);
+    (windows[start] ??= []).add(a);
+  }
+
+  final memories = <Memory>[];
+
+  // On this day
+  final now = DateTime.now();
+  final onThisDay = all
+      .where((a) =>
+          a.createDateTime.month == now.month &&
+          a.createDateTime.day == now.day &&
+          a.createDateTime.year < now.year)
+      .toList();
+  if (onThisDay.length >= 3) {
+    final years = now.year - onThisDay.first.createDateTime.year;
+    memories.add(Memory(
+      id: 'otd-${now.month}-${now.day}',
+      title: 'On this day',
+      subtitle: years == 1 ? '1 year ago' : '$years years ago',
+      assets: onThisDay,
+      cover: _pickCover(onThisDay, faceScore),
+      start: onThisDay.first.createDateTime,
+    ));
+  }
+
+  final keys = windows.keys.toList()..sort((a, b) => b.compareTo(a));
+  for (final k in keys) {
+    final list = windows[k]!;
+    if (list.length < minPhotos) continue;
+    memories.add(Memory(
+      id: 'tw-${k.toIso8601String()}',
+      title: 'Two weeks in review',
+      subtitle: monthFmt.format(k),
+      assets: list,
+      cover: _pickCover(list, faceScore),
+      start: k,
+    ));
+  }
+  return memories;
+}
+
+/// Prefers a photo (not video) with people in it, otherwise the middle one.
+AssetEntity _pickCover(List<AssetEntity> list, int Function(String) faceScore) {
+  final photos = list.where((a) => a.type == AssetType.image).toList();
+  if (photos.isEmpty) return list.first;
+  AssetEntity? best;
+  var bestScore = 0;
+  for (final p in photos) {
+    final s = faceScore(p.id);
+    if (s > bestScore && s <= 4) {
+      best = p;
+      bestScore = s;
+    }
+  }
+  return best ?? photos[photos.length ~/ 2];
+}
+-----------------------------------------------
+smartsanner.dart 
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'media_repository.dart';
+
+/// What the on-device scan learned about one photo.
+class SmartInfo {
+  SmartInfo({
+    required this.tags,
+    required this.faces,
+    this.fx = 0.5,
+    this.fy = 0.4,
+    this.lat,
+    this.lng,
+  });
+
+  final List<String> tags;
+  final int faces;
+
+  /// Centre of the largest face, normalised 0..1 (used to crop avatars).
+  final double fx, fy;
+  final double? lat, lng;
+
+  Map<String, dynamic> toJson() => {
+        't': tags,
+        'f': faces,
+        'x': fx,
+        'y': fy,
+        if (lat != null) 'la': lat,
+        if (lng != null) 'lo': lng,
+      };
+
+  factory SmartInfo.fromJson(Map<String, dynamic> j) => SmartInfo(
+        tags: (j['t'] as List).cast<String>(),
+        faces: j['f'] as int,
+        fx: (j['x'] as num?)?.toDouble() ?? 0.5,
+        fy: (j['y'] as num?)?.toDouble() ?? 0.4,
+        lat: (j['la'] as num?)?.toDouble(),
+        lng: (j['lo'] as num?)?.toDouble(),
+      );
+}
+
+/// A cluster of photos taken near the same spot (~10 km).
+class PlaceInfo {
+  PlaceInfo({required this.key, required this.name, required this.assets});
+  final String key;
+  final String name;
+  final List<AssetEntity> assets;
+}
+
+/// Smart-tag categories, built from ML Kit's on-device image labels.
+const Map<String, List<String>> kTagRules = {
+  'Food': [
+    'food', 'cake', 'bread', 'fruit', 'vegetable', 'pizza', 'dessert',
+    'cookie', 'cuisine', 'dish', 'meal', 'sushi', 'pasta', 'noodle', 'icing',
+    'baked goods', 'fast food', 'juice', 'coffee', 'tea', 'cup', 'plate',
+  ],
+  'Buildings': [
+    'building', 'skyscraper', 'tower', 'temple', 'church', 'mosque',
+    'castle', 'bridge', 'monument', 'house', 'palace', 'shrine', 'statue',
+    'architecture', 'stadium',
+  ],
+  'Nature': [
+    'flower', 'plant', 'tree', 'sky', 'lake', 'sunset', 'beach', 'mountain',
+    'waterfall', 'garden', 'forest', 'river', 'cloud', 'grass', 'leaf',
+    'sea', 'rainbow', 'petal',
+  ],
+  'Animals': [
+    'dog', 'cat', 'bird', 'pet', 'horse', 'butterfly', 'insect', 'fish',
+    'cattle', 'duck', 'monkey', 'elephant',
+  ],
+  'Vehicles': [
+    'car', 'bicycle', 'motorcycle', 'bus', 'vehicle', 'wheel', 'truck',
+    'train', 'airplane', 'boat', 'tire',
+  ],
+  'Documents': [
+    'paper', 'poster', 'menu', 'receipt', 'newspaper', 'document', 'text',
+    'handwriting', 'whiteboard', 'screenshot', 'chart',
+  ],
+  'Celebrations': [
+    'balloon', 'party', 'fireworks', 'christmas', 'candle', 'event',
+    'wedding', 'festival', 'gift', 'bride',
+  ],
+  'Selfies': ['selfie'],
+  'Babies': ['baby', 'toddler', 'child'],
+};
+
+const kTagIcons = {
+  'Food': '🍰',
+  'Buildings': '🏛',
+  'Nature': '🌿',
+  'Animals': '🐾',
+  'Vehicles': '🛵',
+  'Documents': '📄',
+  'Celebrations': '🎉',
+  'Selfies': '🤳',
+  'Babies': '🍼',
+};
+
+/// Runs ML Kit image labelling + face detection on downscaled thumbnails,
+/// entirely on-device, and caches the results.
+class SmartScanner extends ChangeNotifier {
+  SmartScanner(this.repo);
+
+  final MediaRepository repo;
+
+  /// Newest N photos scanned. Raise it if you want a deeper index.
+  static const maxScan = 3000;
+  static const _prefsKey = 'smart_index_v1';
+  static const _placesKey = 'place_names_v1';
+
+  final Map<String, SmartInfo> _index = {};
+  final Map<String, String> _placeNames = {};
+  List<PlaceInfo> places = const [];
+  Map<String, List<AssetEntity>> tagged = const {};
+  List<AssetEntity> withFaces = const [];
+
+  bool running = false;
+  int done = 0;
+  int total = 0;
+  bool _cancel = false;
+  bool _restored = false;
+
+  double get progress => total == 0 ? 1 : done / total;
+
+  int faceCount(String id) => _index[id]?.faces ?? 0;
+  SmartInfo? infoOf(String id) => _index[id];
+  List<String> tagsOf(String id) => _index[id]?.tags ?? const [];
+
+  String? placeNameOf(String id) {
+    final info = _index[id];
+    if (info?.lat == null) return null;
+    return _placeNames[_placeKey(info!.lat!, info.lng!)];
+  }
+
+  Future<void> start() async {
+    if (running) return;
+    running = true;
+    _cancel = false;
+
+    final prefs = await SharedPreferences.getInstance();
+    if (!_restored) {
+      _restored = true;
+      final raw = prefs.getString(_prefsKey);
+      if (raw != null) {
+        final m = jsonDecode(raw) as Map<String, dynamic>;
+        m.forEach((k, v) => _index[k] = SmartInfo.fromJson(v as Map<String, dynamic>));
+      }
+      final rawPlaces = prefs.getString(_placesKey);
+      if (rawPlaces != null) {
+        _placeNames.addAll((jsonDecode(rawPlaces) as Map).cast<String, String>());
+      }
+    }
+    _rebuild();
+
+    final todo = repo.all
+        .where((a) => a.type == AssetType.image)
+        .take(maxScan)
+        .where((a) => !_index.containsKey(a.id))
+        .toList();
+    total = todo.length;
+    done = 0;
+    notifyListeners();
+
+    if (todo.isNotEmpty) {
+      final labeler =
+          ImageLabeler(options: ImageLabelerOptions(confidenceThreshold: 0.6));
+      final faceDetector = FaceDetector(
+        options: FaceDetectorOptions(performanceMode: FaceDetectorMode.fast),
+      );
+      final tmpDir = await getTemporaryDirectory();
+      final tmp = File('${tmpDir.path}/scan_thumb.jpg');
+
+      for (final asset in todo) {
+        if (_cancel) break;
+        try {
+          _index[asset.id] = await _scanOne(asset, labeler, faceDetector, tmp);
+        } catch (e) {
+          debugPrint('scan failed for ${asset.id}: $e');
+          _index[asset.id] = SmartInfo(tags: const [], faces: 0);
+        }
+        done++;
+        if (done % 40 == 0 || done == total) {
+          _rebuild();
+          await prefs.setString(_prefsKey, jsonEncode(_index));
+          notifyListeners();
+        }
+      }
+      await labeler.close();
+      await faceDetector.close();
+      await prefs.setString(_prefsKey, jsonEncode(_index));
+    }
+
+    await _resolvePlaceNames(prefs);
+    _rebuild();
+    running = false;
+    repo.invalidateMemories();
+    notifyListeners();
+  }
+
+  Future<SmartInfo> _scanOne(
+    AssetEntity asset,
+    ImageLabeler labeler,
+    FaceDetector faceDetector,
+    File tmp,
+  ) async {
+    final bytes =
+        await asset.thumbnailDataWithSize(ThumbnailSize(640, 640), quality: 85);
+    final tags = <String>{};
+    var faces = 0;
+    double fx = 0.5, fy = 0.4;
+
+    if (bytes != null) {
+      await tmp.writeAsBytes(bytes, flush: true);
+      final input = InputImage.fromFilePath(tmp.path);
+
+      final labels = await labeler.processImage(input);
+      for (final l in labels) {
+        final name = l.label.toLowerCase();
+        final words = name.split(RegExp(r'[\s-]+'));
+        kTagRules.forEach((tag, rules) {
+          if (rules.any((w) => name == w || words.contains(w))) tags.add(tag);
+        });
+      }
+
+      final found = await faceDetector.processImage(input);
+      faces = found.length;
+      if (found.isNotEmpty) {
+        final biggest = found.reduce((a, b) =>
+            a.boundingBox.width * a.boundingBox.height >=
+                    b.boundingBox.width * b.boundingBox.height
+                ? a
+                : b);
+        final size = await _imageSize(bytes);
+        if (size != null) {
+          fx = (biggest.boundingBox.center.dx / size.width).clamp(0.0, 1.0);
+          fy = (biggest.boundingBox.center.dy / size.height).clamp(0.0, 1.0);
+        }
+        // A single big face close to the camera is very likely a selfie.
+        final rel = biggest.boundingBox.width / (size?.width ?? 640);
+        if (faces == 1 && rel > 0.35) tags.add('Selfies');
+      }
+    }
+
+    double? lat, lng;
+    try {
+      final ll = await asset.latlngAsync();
+      final la = ll?.latitude, lo = ll?.longitude;
+      if (la != null && lo != null && !(la == 0 && lo == 0)) {
+        lat = la;
+        lng = lo;
+      }
+    } catch (_) {}
+
+    return SmartInfo(
+        tags: tags.toList(), faces: faces, fx: fx, fy: fy, lat: lat, lng: lng);
+  }
+
+  static Future<ui.Size?> _imageSize(Uint8List bytes) async {
+    try {
+      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+      final desc = await ui.ImageDescriptor.encoded(buffer);
+      final s = ui.Size(desc.width.toDouble(), desc.height.toDouble());
+      desc.dispose();
+      buffer.dispose();
+      return s;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _placeKey(double lat, double lng) =>
+      '${(lat * 10).round()}:${(lng * 10).round()}';
+
+  Future<void> _resolvePlaceNames(SharedPreferences prefs) async {
+    final keys = <String, SmartInfo>{};
+    for (final info in _index.values) {
+      if (info.lat == null) continue;
+      keys.putIfAbsent(_placeKey(info.lat!, info.lng!), () => info);
+    }
+    var changed = false;
+    for (final e in keys.entries) {
+      if (_placeNames.containsKey(e.key) || _cancel) continue;
+      try {
+        final marks = await placemarkFromCoordinates(e.value.lat!, e.value.lng!);
+        if (marks.isNotEmpty) {
+          final p = marks.first;
+          final name = [p.subLocality, p.locality, p.subAdministrativeArea, p.administrativeArea]
+              .firstWhere((s) => s != null && s.trim().isNotEmpty, orElse: () => null);
+          _placeNames[e.key] = name ?? 'Unknown place';
+          changed = true;
+        }
+      } catch (_) {
+        // Offline or geocoder unavailable – try again next launch.
+      }
+    }
+    if (changed) await prefs.setString(_placesKey, jsonEncode(_placeNames));
+  }
+
+  void _rebuild() {
+    final tagMap = <String, List<AssetEntity>>{};
+    final faces = <AssetEntity>[];
+    final placeMap = <String, List<AssetEntity>>{};
+
+    for (final a in repo.all) {
+      final info = _index[a.id];
+      if (info == null) continue;
+      for (final t in info.tags) {
+        (tagMap[t] ??= []).add(a);
+      }
+      if (info.faces > 0) faces.add(a);
+      if (info.lat != null) {
+        (placeMap[_placeKey(info.lat!, info.lng!)] ??= []).add(a);
+      }
+    }
+
+    // Merge clusters that resolved to the same place name.
+    final named = <String, List<AssetEntity>>{};
+    placeMap.forEach((key, list) {
+      final name = _placeNames[key] ?? 'Locating…';
+      (named[name] ??= []).addAll(list);
+    });
+    places = named.entries
+        .map((e) => PlaceInfo(key: e.key, name: e.key, assets: e.value
+          ..sort((a, b) => b.createDateTime.compareTo(a.createDateTime))))
+        .toList()
+      ..sort((a, b) => b.assets.length.compareTo(a.assets.length));
+
+    tagged = Map.fromEntries(tagMap.entries.toList()
+      ..sort((a, b) => b.value.length.compareTo(a.value.length)));
+    withFaces = faces;
+  }
+
+  @override
+  void dispose() {
+    _cancel = true;
+    super.dispose();
+  }
+}
+-------------------------------------
+common.dart
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+
+import '../data/gallery_scope.dart';
+import '../screens/viewer_screen.dart';
+import '../theme.dart';
+
+/// Frosted-glass surface used for the search bar, nav bar and pills.
+class Glass extends StatelessWidget {
+  const Glass({
+    super.key,
+    required this.child,
+    this.radius = 28,
+    this.padding = EdgeInsets.zero,
+    this.blur = 22,
+  });
+
+  final Widget child;
+  final double radius;
+  final EdgeInsets padding;
+  final double blur;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: GalleryColors.glass(b),
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: GalleryColors.glassBorder(b), width: 0.8),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// A thumbnail for one photo/video with video-duration and favourite badges.
+class AssetThumb extends StatelessWidget {
+  const AssetThumb(
+    this.asset, {
+    super.key,
+    this.radius = 0,
+    this.size = 300,
+    this.alignment = Alignment.center,
+    this.showBadges = true,
+  });
+
+  final AssetEntity asset;
+  final double radius;
+  final int size;
+  final Alignment alignment;
+  final bool showBadges;
+
+  @override
+  Widget build(BuildContext context) {
+    final image = Image(
+      image: AssetEntityImageProvider(
+        asset,
+        isOriginal: false,
+        thumbnailSize: ThumbnailSize.square(size),
+      ),
+      fit: BoxFit.cover,
+      alignment: alignment,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (_, __, ___) => Container(
+        color: Colors.black12,
+        child: const Icon(Icons.broken_image_outlined, color: Colors.black26),
+      ),
+      frameBuilder: (context, child, frame, sync) => sync
+          ? child
+          : AnimatedOpacity(
+              opacity: frame == null ? 0 : 1,
+              duration: const Duration(milliseconds: 180),
+              child: child,
+            ),
+    );
+
+    Widget content = Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(color: Colors.black.withOpacity(0.05)),
+        image,
+        if (showBadges && asset.type == AssetType.video)
+          Positioned(
+            right: 5,
+            bottom: 4,
+            child: Row(children: [
+              const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 15,
+                  shadows: [Shadow(blurRadius: 4)]),
+              Text(formatDuration(asset.videoDuration),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      shadows: [Shadow(blurRadius: 4)])),
+            ]),
+          ),
+        if (showBadges && GalleryScope.of(context).isFavorite(asset))
+          const Positioned(
+            left: 5,
+            bottom: 4,
+            child: Icon(Icons.favorite, color: Colors.white, size: 14,
+                shadows: [Shadow(blurRadius: 4)]),
+          ),
+      ],
+    );
+    if (radius > 0) {
+      content = ClipRRect(borderRadius: BorderRadius.circular(radius), child: content);
+    }
+    return content;
+  }
+}
+
+String formatDuration(Duration d) {
+  final h = d.inHours;
+  final m = d.inMinutes.remainder(60).toString().padLeft(h > 0 ? 2 : 1, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return h > 0 ? '$h:$m:$s' : '$m:$s';
+}
+
+/// Opens the full-screen viewer at [index] inside [assets].
+void openViewer(BuildContext context, List<AssetEntity> assets, int index) {
+  Navigator.of(context).push(PageRouteBuilder(
+    transitionDuration: const Duration(milliseconds: 220),
+    reverseTransitionDuration: const Duration(milliseconds: 180),
+    pageBuilder: (_, __, ___) => ViewerScreen(assets: assets, initialIndex: index),
+    transitionsBuilder: (_, anim, __, child) => FadeTransition(
+      opacity: anim,
+      child: ScaleTransition(
+        scale: Tween(begin: 0.96, end: 1.0)
+            .animate(CurvedAnimation(parent: anim, curve: Curves.easeOut)),
+        child: child,
+      ),
+    ),
+  ));
+}
+
+/// A header + grid pair inside a CustomScrollView.
+class AssetGroup {
+  AssetGroup(this.title, this.assets, {this.trailing});
+  final String title;
+  final String? trailing;
+  final List<AssetEntity> assets;
+}
+
+/// Builds slivers for date-grouped grids. Tapping opens the viewer over the
+/// flattened list so you can swipe across groups.
+List<Widget> groupedGridSlivers(
+  BuildContext context, {
+  required List<AssetGroup> groups,
+  required int columns,
+  double spacing = 2,
+  double headerHeight = 50,
+  TextStyle? headerStyle,
+  int thumbSize = 300,
+}) {
+  final flat = <AssetEntity>[for (final g in groups) ...g.assets];
+  final style = headerStyle ??
+      Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600);
+  final slivers = <Widget>[];
+  var offset = 0;
+  for (final g in groups) {
+    final base = offset;
+    slivers.add(SliverToBoxAdapter(
+      child: Container(
+        height: headerHeight,
+        alignment: Alignment.bottomLeft,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        child: Row(children: [
+          Expanded(child: Text(g.title, style: style)),
+          if (g.trailing != null)
+            Text(g.trailing!,
+                style: TextStyle(
+                    fontSize: 12,
+                    color: GalleryColors.subtle(Theme.of(context).brightness))),
+        ]),
+      ),
+    ));
+    slivers.add(SliverGrid(
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        mainAxisSpacing: spacing,
+        crossAxisSpacing: spacing,
+      ),
+      delegate: SliverChildBuilderDelegate(
+        (context, i) => GestureDetector(
+          onTap: () => openViewer(context, flat, base + i),
+          child: AssetThumb(g.assets[i], size: thumbSize),
+        ),
+        childCount: g.assets.length,
+      ),
+    ));
+    offset += g.assets.length;
+  }
+  return slivers;
+}
+
+/// 2×2 collage tile (People, Places, "Others").
+class CollageTile extends StatelessWidget {
+  const CollageTile({
+    super.key,
+    required this.assets,
+    this.circle = false,
+    this.alignments,
+  });
+
+  final List<AssetEntity> assets;
+  final bool circle;
+  final List<Alignment>? alignments;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return AspectRatio(
+      aspectRatio: 1,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: GalleryColors.glass(b),
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: GridView.count(
+          crossAxisCount: 2,
+          mainAxisSpacing: 7,
+          crossAxisSpacing: 7,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          children: [
+            for (var i = 0; i < 4; i++)
+              i < assets.length
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(circle ? 100 : 14),
+                      child: AssetThumb(
+                        assets[i],
+                        size: 160,
+                        showBadges: false,
+                        alignment: alignments != null && i < alignments!.length
+                            ? alignments![i]
+                            : Alignment.center,
+                      ),
+                    )
+                  : Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.04),
+                        borderRadius: BorderRadius.circular(circle ? 100 : 14),
+                      ),
+                    ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Name + count caption under a tile, ColorOS style.
+class TileCaption extends StatelessWidget {
+  const TileCaption(this.title, this.count, {super.key});
+  final String title;
+  final String count;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+          const SizedBox(height: 2),
+          Text(count,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: GalleryColors.subtle(b))),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Smart tags            View All >" row.
+class SectionHeader extends StatelessWidget {
+  const SectionHeader(this.title, {super.key, this.onViewAll});
+  final String title;
+  final VoidCallback? onViewAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 12, 12),
+      child: Row(children: [
+        Expanded(
+          child: Text(title,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+        ),
+        if (onViewAll != null)
+          TextButton(
+            onPressed: onViewAll,
+            style: TextButton.styleFrom(foregroundColor: GalleryColors.subtle(b)),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('View All'),
+              Icon(Icons.chevron_right, size: 20),
+            ]),
+          ),
+      ]),
+    );
+  }
+}
+
+/// Simple scaffold with gradient + back button for secondary pages.
+class SubPage extends StatelessWidget {
+  const SubPage({super.key, required this.title, required this.slivers, this.actions});
+  final String title;
+  final List<Widget> slivers;
+  final List<Widget>? actions;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: GradientBackground(
+        child: CustomScrollView(
+          slivers: [
+            SliverAppBar.large(
+              title: Text(title),
+              backgroundColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
+              actions: actions,
+            ),
+            ...slivers,
+            SliverToBoxAdapter(
+                child: SizedBox(height: MediaQuery.paddingOf(context).bottom + 24)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+-----------------------------------
+album.dart
+import 'package:flutter/material.dart';
+
+import '../data/gallery_scope.dart';
+import '../data/media_repository.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+import 'asset_grid_screen.dart';
+import 'home_shell.dart';
+
+class AlbumsScreen extends StatelessWidget {
+  const AlbumsScreen({super.key});
+
+  /// Albums with fewer items than this are folded into "Others"
+  /// (as long as there are more than [_maxMain] albums).
+  static const _maxMain = 8;
+  static const _smallAlbum = 12;
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = GalleryScope.of(context);
+    final b = Theme.of(context).brightness;
+
+    final albums = repo.albums;
+    final List<AlbumInfo> main;
+    final List<AlbumInfo> others;
+    if (albums.length <= _maxMain + 1) {
+      main = albums;
+      others = const [];
+    } else {
+      main = [
+        for (var i = 0; i < albums.length; i++)
+          if ((i < _maxMain && albums[i].count >= _smallAlbum) || i < 3) albums[i],
+      ];
+      others = albums.where((a) => !main.contains(a)).toList();
+    }
+
+    final types = [
+      for (final t in MediaType.values)
+        (type: t, items: repo.mediaType(t)),
+    ].where((e) => e.items.isNotEmpty || e.type == MediaType.favorites).toList();
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: SizedBox(height: ShellInsets.top(context))),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 14,
+              mainAxisSpacing: 10,
+              childAspectRatio: 0.66,
+            ),
+            delegate: SliverChildListDelegate([
+              for (final album in main)
+                _AlbumTile(
+                  title: album.name,
+                  count: '${album.count}',
+                  cover: AspectRatio(
+                    aspectRatio: 1,
+                    child: AssetThumb(album.cover!, radius: 18, showBadges: false),
+                  ),
+                  onTap: () => AssetGridScreen.open(context, album.name, album.assets),
+                ),
+              if (others.isNotEmpty)
+                _AlbumTile(
+                  title: 'Others',
+                  count: others.map((a) => a.name).join(', '),
+                  cover: CollageTile(assets: [for (final a in others.take(4)) a.cover!]),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => _OtherAlbumsScreen(albums: others))),
+                ),
+            ]),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SectionHeader('Media types')),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          sliver: SliverToBoxAdapter(
+            child: Container(
+              decoration: BoxDecoration(
+                color: GalleryColors.glass(b),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: Column(children: [
+                for (final e in types)
+                  ListTile(
+                    leading: Icon(_iconFor(e.type)),
+                    title: Text(e.type.label, style: const TextStyle(fontSize: 17)),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('${e.items.length}',
+                          style: TextStyle(color: GalleryColors.subtle(b), fontSize: 15)),
+                      Icon(Icons.chevron_right, color: GalleryColors.subtle(b)),
+                    ]),
+                    onTap: () => AssetGridScreen.open(context, e.type.label, e.items),
+                  ),
+              ]),
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(child: SizedBox(height: ShellInsets.bottom(context) + 24)),
+      ],
+    );
+  }
+
+  static IconData _iconFor(MediaType t) => switch (t) {
+        MediaType.videos => Icons.videocam_outlined,
+        MediaType.gifs => Icons.gif_box_outlined,
+        MediaType.screenshots => Icons.screenshot_outlined,
+        MediaType.favorites => Icons.favorite_border,
+        MediaType.panoramas => Icons.panorama_outlined,
+        MediaType.recent => Icons.schedule,
+      };
+}
+
+class _AlbumTile extends StatelessWidget {
+  const _AlbumTile({
+    required this.title,
+    required this.count,
+    required this.cover,
+    required this.onTap,
+  });
+
+  final String title;
+  final String count;
+  final Widget cover;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [cover, TileCaption(title, count)],
+      ),
+    );
+  }
+}
+
+class _OtherAlbumsScreen extends StatelessWidget {
+  const _OtherAlbumsScreen({required this.albums});
+  final List<AlbumInfo> albums;
+
+  @override
+  Widget build(BuildContext context) {
+    return SubPage(
+      title: 'Others',
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.all(16),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 14,
+              mainAxisSpacing: 10,
+              childAspectRatio: 0.66,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final album = albums[i];
+                return _AlbumTile(
+                  title: album.name,
+                  count: '${album.count}',
+                  cover: AspectRatio(
+                    aspectRatio: 1,
+                    child: AssetThumb(album.cover!, radius: 18, showBadges: false),
+                  ),
+                  onTap: () => AssetGridScreen.open(context, album.name, album.assets),
+                );
+              },
+              childCount: albums.length,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+--------------------------------------------
+asset_grid_screen.dart
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+
+import '../data/grouping.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+
+/// Generic date-grouped grid for an album, media type, tag, place, etc.
+class AssetGridScreen extends StatelessWidget {
+  const AssetGridScreen({
+    super.key,
+    required this.title,
+    required this.assets,
+    this.emptyText = 'Nothing here yet',
+  });
+
+  final String title;
+  final List<AssetEntity> assets;
+  final String emptyText;
+
+  static void open(BuildContext context, String title, List<AssetEntity> assets) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => AssetGridScreen(title: title, assets: assets),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return SubPage(
+      title: title,
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(countLabel(assets),
+                style: TextStyle(color: GalleryColors.subtle(b))),
+          ),
+        ),
+        if (assets.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: Text(emptyText)),
+          )
+        else
+          ...groupedGridSlivers(context, groups: groupByDay(assets), columns: 4),
+      ],
+    );
+  }
+}
+------------------------------------------------------------
+explore_screen.dart
+
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+
+import '../data/gallery_scope.dart';
+import '../data/media_repository.dart';
+import '../data/smart_scanner.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+import 'asset_grid_screen.dart';
+import 'home_shell.dart';
+import 'memories_screen.dart';
+
+/// Alignment that centres a thumbnail on the detected face.
+Alignment faceAlignment(SmartScanner s, AssetEntity a) {
+  final info = s.infoOf(a.id);
+  if (info == null || info.faces == 0) return Alignment.center;
+  return Alignment(info.fx * 2 - 1, info.fy * 2 - 1);
+}
+
+class ExploreScreen extends StatelessWidget {
+  const ExploreScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = GalleryScope.of(context);
+    return ListenableBuilder(
+      listenable: repo.scanner,
+      builder: (context, _) => _build(context, repo, repo.scanner),
+    );
+  }
+
+  Widget _build(BuildContext context, MediaRepository repo, SmartScanner s) {
+    final width = MediaQuery.sizeOf(context).width;
+    final peopleTileW = (width - 32 - 20) / 2.5;
+    final memories = repo.memories;
+    final tags = s.tagged.entries.toList();
+
+    // Pick up to four distinct "faces" for the People tile.
+    final people = <AssetEntity>[];
+    for (final a in s.withFaces) {
+      if ((s.infoOf(a.id)?.faces ?? 0) == 1) people.add(a);
+      if (people.length == 4) break;
+    }
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: SizedBox(height: ShellInsets.top(context) - 12)),
+
+        if (s.running && s.total > 0)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Analyzing photos on this device… ${s.done}/${s.total}',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: GalleryColors.subtle(Theme.of(context).brightness))),
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(value: s.progress, minHeight: 3),
+                ),
+              ]),
+            ),
+          ),
+
+        // ---------------------------------------------------- People & places
+        const SliverToBoxAdapter(child: SectionHeader('People & places')),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(
+                width: peopleTileW,
+                child: GestureDetector(
+                  onTap: () => AssetGridScreen.open(context, 'People', s.withFaces),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    CollageTile(
+                      assets: people,
+                      circle: true,
+                      alignments: [for (final p in people) faceAlignment(s, p)],
+                    ),
+                    TileCaption('People', '${s.withFaces.length}'),
+                  ]),
+                ),
+              ),
+              const SizedBox(width: 20),
+              SizedBox(
+                width: peopleTileW,
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const PlacesScreen())),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    CollageTile(assets: [for (final p in s.places.take(4)) p.assets.first]),
+                    TileCaption('Places', '${s.places.length}'),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+
+        // -------------------------------------------------------- Smart tags
+        SliverToBoxAdapter(
+          child: SectionHeader('Smart tags',
+              onViewAll: tags.isEmpty
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const SmartTagsScreen()))),
+        ),
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: 196,
+            child: tags.isEmpty
+                ? Center(
+                    child: Text(
+                        s.running ? 'Finding food, buildings, pets…' : 'No smart tags yet',
+                        style: TextStyle(
+                            color: GalleryColors.subtle(Theme.of(context).brightness))))
+                : ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: tags.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 14),
+                    itemBuilder: (context, i) {
+                      final t = tags[i];
+                      return _TagTile(name: t.key, assets: t.value, size: 140);
+                    },
+                  ),
+          ),
+        ),
+
+        // ---------------------------------------------------------- Memories
+        SliverToBoxAdapter(
+          child: SectionHeader('Memories',
+              onViewAll: memories.isEmpty
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const MemoriesScreen()))),
+        ),
+        if (memories.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: Text('Memories appear once you have a few weeks of photos',
+                    style: TextStyle(
+                        color: GalleryColors.subtle(Theme.of(context).brightness))),
+              ),
+            ),
+          )
+        else
+          SliverToBoxAdapter(
+            child: SizedBox(
+              height: 240,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: memories.length.clamp(0, 10),
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (context, i) => SizedBox(
+                  width: width - 56,
+                  child: MemoryCard(memory: memories[i]),
+                ),
+              ),
+            ),
+          ),
+
+        SliverToBoxAdapter(child: SizedBox(height: ShellInsets.bottom(context) + 24)),
+      ],
+    );
+  }
+}
+
+class _TagTile extends StatelessWidget {
+  const _TagTile({required this.name, required this.assets, required this.size});
+  final String name;
+  final List<AssetEntity> assets;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => AssetGridScreen.open(context, name, assets),
+      child: SizedBox(
+        width: size,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(
+            width: size,
+            height: size,
+            child: AssetThumb(assets.first, radius: 20, showBadges: false),
+          ),
+          TileCaption(name, '${assets.length}'),
+        ]),
+      ),
+    );
+  }
+}
+
+class SmartTagsScreen extends StatelessWidget {
+  const SmartTagsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = GalleryScope.of(context).scanner;
+    return ListenableBuilder(
+      listenable: s,
+      builder: (context, _) {
+        final tags = s.tagged.entries.toList();
+        return SubPage(
+          title: 'Smart tags',
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.all(16),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 140,
+                  crossAxisSpacing: 14,
+                  mainAxisSpacing: 10,
+                  mainAxisExtent: 190,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) => LayoutBuilder(
+                    builder: (context, c) => _TagTile(
+                        name: tags[i].key, assets: tags[i].value, size: c.maxWidth),
+                  ),
+                  childCount: tags.length,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class PlacesScreen extends StatelessWidget {
+  const PlacesScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = GalleryScope.of(context).scanner;
+    return ListenableBuilder(
+      listenable: s,
+      builder: (context, _) => SubPage(
+        title: 'Places',
+        slivers: [
+          if (s.places.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(
+                  child: Text(
+                    'No places yet. Photos need location info (turn on '
+                    '"Save location" in your camera settings).',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.all(16),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  crossAxisSpacing: 14,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: 0.72,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) {
+                    final p = s.places[i];
+                    return GestureDetector(
+                      onTap: () => AssetGridScreen.open(context, p.name, p.assets),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        AspectRatio(
+                          aspectRatio: 1,
+                          child: AssetThumb(p.assets.first, radius: 20, showBadges: false),
+                        ),
+                        TileCaption(p.name, '${p.assets.length}'),
+                      ]),
+                    );
+                  },
+                  childCount: s.places.length,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+------------------------------
+home_shell.dart
+
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+import '../data/media_repository.dart';
+
+class HomeShell extends StatefulWidget {
+  const HomeShell({super.key});
+
+  @override
+  State<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<HomeShell> {
+  final MediaRepository _repository = MediaRepository();
+  List<AssetEntity> _images = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadImages();
+  }
+
+  Future<void> _loadImages() async {
+    final images = await _repository.getRecentImages();
+    if (mounted) {
+      setState(() {
+        _images = images;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Gallery')),
+      body: _images.isEmpty 
+        ? const Center(child: Text('No images found or permission denied.'))
+        : GridView.builder(
+            padding: const EdgeInsets.all(2),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 2,
+              mainAxisSpacing: 2,
+            ),
+            itemCount: _images.length,
+            itemBuilder: (context, index) {
+              return FutureBuilder<Uint8List?>(
+                future: _images[index].thumbnailDataWithSize(const ThumbnailSize(200, 200)),
+                builder: (context, snapshot) {
+                  if (snapshot.hasData && snapshot.data != null) {
+                    return Image.memory(snapshot.data!, fit: BoxFit.cover);
+                  }
+                  return const Center(child: CircularProgressIndicator());
+                },
+              );
+            },
+          ),
+    );
+  }
+}
+--------------------------------------------------------
+memories_screen.dart
+
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+
+import '../data/gallery_scope.dart';
+import '../data/grouping.dart';
+import '../data/memories.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+
+/// Big rounded card: cover photo with "Two weeks in review / September 2026".
+class MemoryCard extends StatelessWidget {
+  const MemoryCard({super.key, required this.memory, this.titleSize = 28});
+  final Memory memory;
+  final double titleSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => MemoryScreen(memory: memory))),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(26),
+        child: Stack(fit: StackFit.expand, children: [
+          AssetThumb(memory.cover, size: 700, showBadges: false),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Color(0x99000000)],
+                stops: [0.55, 1],
+              ),
+            ),
+          ),
+          Positioned(
+            left: 22,
+            right: 22,
+            bottom: 18,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(memory.title,
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: titleSize,
+                      fontWeight: FontWeight.w600,
+                      shadows: const [Shadow(blurRadius: 8, color: Colors.black38)])),
+              const SizedBox(height: 2),
+              Text(memory.subtitle,
+                  style: const TextStyle(color: Colors.white, fontSize: 14)),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// "View All" list of memories, styled like the reference screenshot.
+class MemoriesScreen extends StatelessWidget {
+  const MemoriesScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final memories = GalleryScope.of(context).memories;
+    return SubPage(
+      title: 'Memories',
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          sliver: SliverList.separated(
+            itemCount: memories.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 14),
+            itemBuilder: (context, i) => SizedBox(
+              height: 400,
+              child: MemoryCard(memory: memories[i], titleSize: 32),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class MemoryScreen extends StatelessWidget {
+  const MemoryScreen({super.key, required this.memory});
+  final Memory memory;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return Scaffold(
+      body: GradientBackground(
+        child: CustomScrollView(slivers: [
+          SliverAppBar(
+            expandedHeight: 420,
+            pinned: true,
+            stretch: true,
+            foregroundColor: Colors.white,
+            backgroundColor: Colors.black26,
+            actions: [
+              IconButton(
+                tooltip: 'Play',
+                icon: const Icon(Icons.play_circle_outline),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    fullscreenDialog: true,
+                    builder: (_) => SlideshowScreen(assets: memory.assets))),
+              ),
+            ],
+            flexibleSpace: FlexibleSpaceBar(
+              titlePadding: const EdgeInsetsDirectional.only(start: 56, bottom: 16),
+              title: Text(memory.subtitle),
+              background: Stack(fit: StackFit.expand, children: [
+                AssetThumb(memory.cover, size: 900, showBadges: false),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0x55000000), Colors.transparent, Color(0x99000000)],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 20,
+                  bottom: 52,
+                  child: Text(memory.title,
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 30, fontWeight: FontWeight.w600)),
+                ),
+              ]),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: Text(countLabel(memory.assets),
+                  style: TextStyle(color: GalleryColors.subtle(b))),
+            ),
+          ),
+          ...groupedGridSlivers(context,
+              groups: groupByDay(memory.assets, long: true), columns: 3, spacing: 3),
+          SliverToBoxAdapter(
+              child: SizedBox(height: MediaQuery.paddingOf(context).bottom + 24)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Auto-advancing slideshow with a gentle Ken Burns zoom.
+class SlideshowScreen extends StatefulWidget {
+  const SlideshowScreen({super.key, required this.assets});
+  final List<AssetEntity> assets;
+
+  @override
+  State<SlideshowScreen> createState() => _SlideshowScreenState();
+}
+
+class _SlideshowScreenState extends State<SlideshowScreen> {
+  late final List<AssetEntity> _photos =
+      widget.assets.where((a) => a.type == AssetType.image).toList().reversed.toList();
+  int _index = 0;
+  Timer? _timer;
+  bool _paused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (_paused || _photos.isEmpty) return;
+      setState(() => _index = (_index + 1) % _photos.length);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_photos.isEmpty) {
+      return const Scaffold(body: Center(child: Text('No photos to play')));
+    }
+    final asset = _photos[_index];
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: () => setState(() => _paused = !_paused),
+        child: Stack(fit: StackFit.expand, children: [
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 900),
+            child: TweenAnimationBuilder<double>(
+              key: ValueKey(asset.id),
+              tween: Tween(begin: 1.0, end: 1.12),
+              duration: const Duration(seconds: 5),
+              builder: (_, scale, child) => Transform.scale(scale: scale, child: child),
+              child: Image(
+                image: AssetEntityImageProvider(asset,
+                    isOriginal: false, thumbnailSize: ThumbnailSize.square(1600)),
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: IconButton(
+                color: Colors.white,
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ),
+          if (_paused)
+            const Center(
+                child: Icon(Icons.pause_circle_filled, color: Colors.white70, size: 72)),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.paddingOf(context).bottom + 16,
+            child: LinearProgressIndicator(
+              value: (_index + 1) / _photos.length,
+              backgroundColor: Colors.white24,
+              color: Colors.white,
+              minHeight: 2,
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+----------------------------------------------
+photos_screen.dart
+
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+
+import '../data/gallery_scope.dart';
+import '../data/grouping.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+import 'home_shell.dart';
+
+/// Zoom levels, from densest to largest.
+enum Zoom { years, months, all, days }
+
+extension on Zoom {
+  String get label => switch (this) {
+        Zoom.years => 'Years',
+        Zoom.months => 'Months',
+        Zoom.days => 'Days',
+        Zoom.all => 'All',
+      };
+  int get columns => switch (this) {
+        Zoom.years => 1,
+        Zoom.months => 6,
+        Zoom.all => 4,
+        Zoom.days => 3,
+      };
+  double get spacing => switch (this) {
+        Zoom.months => 1.5,
+        Zoom.days => 3,
+        _ => 2,
+      };
+}
+
+class PhotosScreen extends StatefulWidget {
+  const PhotosScreen({super.key});
+
+  @override
+  State<PhotosScreen> createState() => _PhotosScreenState();
+}
+
+class _PhotosScreenState extends State<PhotosScreen> {
+  static const _headerHeight = 50.0;
+  Zoom _zoom = Zoom.all;
+  final _scroll = ScrollController();
+
+  // Pinch tracking (Listener doesn't fight the scroll gesture).
+  final Map<int, Offset> _pointers = {};
+  double? _startSpan;
+  bool _pinchHandled = false;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _setZoom(Zoom z, {int? jumpToGroup}) {
+    if (z == _zoom) return;
+    final ratio = _scroll.hasClients && _scroll.position.maxScrollExtent > 0
+        ? _scroll.offset / _scroll.position.maxScrollExtent
+        : 0.0;
+    setState(() => _zoom = z);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      final max = _scroll.position.maxScrollExtent;
+      final target = jumpToGroup != null ? _offsetOfGroup(jumpToGroup) : ratio * max;
+      _scroll.jumpTo(target.clamp(0.0, max));
+    });
+  }
+
+  /// Offset of group [index] in the months grid (fixed header heights make
+  /// this exact without measuring).
+  double _offsetOfGroup(int index) {
+    final repo = GalleryScope.of(context, listen: false);
+    final groups = groupByMonth(repo.all);
+    final width = MediaQuery.sizeOf(context).width;
+    const z = Zoom.months;
+    final cell = (width - z.spacing * (z.columns - 1)) / z.columns;
+    var y = 0.0;
+    for (var i = 0; i < index && i < groups.length; i++) {
+      final rows = (groups[i].assets.length / z.columns).ceil();
+      y += _headerHeight + rows * cell + (rows - 1) * z.spacing;
+    }
+    // Spacer above the first header is (top - 40); keep the header visible
+    // just below the floating search bar.
+    return math.max(0, y - 40);
+  }
+
+  void _onPointerDown(PointerDownEvent e) {
+    _pointers[e.pointer] = e.position;
+    if (_pointers.length == 2) {
+      _startSpan = _span();
+      _pinchHandled = false;
+    }
+  }
+
+  void _onPointerMove(PointerMoveEvent e) {
+    if (!_pointers.containsKey(e.pointer)) return;
+    _pointers[e.pointer] = e.position;
+    if (_pointers.length != 2 || _startSpan == null || _pinchHandled) return;
+    final scale = _span() / _startSpan!;
+    final idx = _zoom.index;
+    if (scale > 1.35 && idx < Zoom.values.length - 1) {
+      _pinchHandled = true;
+      _setZoom(Zoom.values[idx + 1]);
+    } else if (scale < 0.72 && idx > 0) {
+      _pinchHandled = true;
+      _setZoom(Zoom.values[idx - 1]);
+    }
+  }
+
+  void _onPointerUp(PointerEvent e) {
+    _pointers.remove(e.pointer);
+    if (_pointers.length < 2) _startSpan = null;
+  }
+
+  double _span() {
+    final p = _pointers.values.toList();
+    return math.max(1, (p[0] - p[1]).distance);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = GalleryScope.of(context);
+    final top = ShellInsets.top(context);
+    final bottom = ShellInsets.bottom(context);
+
+    if (repo.all.isEmpty) {
+      return const Center(child: Text('No photos or videos yet'));
+    }
+
+    final slivers = switch (_zoom) {
+      Zoom.years => [_yearsSliver(repo.all)],
+      Zoom.months => groupedGridSlivers(context,
+          groups: groupByMonth(repo.all),
+          columns: _zoom.columns,
+          spacing: _zoom.spacing,
+          headerHeight: _headerHeight,
+          thumbSize: 160),
+      Zoom.all => groupedGridSlivers(context,
+          groups: groupByDay(repo.all),
+          columns: _zoom.columns,
+          spacing: _zoom.spacing,
+          headerHeight: _headerHeight),
+      Zoom.days => groupedGridSlivers(context,
+          groups: groupByDay(repo.all, long: true),
+          columns: _zoom.columns,
+          spacing: _zoom.spacing,
+          headerHeight: _headerHeight,
+          thumbSize: 400),
+    };
+
+    return Stack(
+      children: [
+        Listener(
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerUp,
+          child: RefreshIndicator(
+            edgeOffset: top,
+            onRefresh: repo.load,
+            child: Scrollbar(
+              controller: _scroll,
+              interactive: true,
+              thickness: 6,
+              radius: const Radius.circular(3),
+              child: CustomScrollView(
+                key: ValueKey(_zoom),
+                controller: _scroll,
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverToBoxAdapter(child: SizedBox(height: top - 40)),
+                  ...slivers,
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(16, 24, 16, bottom + 80),
+                      child: Center(
+                        child: Text(countLabel(repo.all),
+                            style: TextStyle(
+                                color: GalleryColors.subtle(
+                                    Theme.of(context).brightness))),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          left: 24,
+          right: 24,
+          bottom: bottom + 12,
+          child: Center(child: _ZoomSwitcher(value: _zoom, onChanged: _setZoom)),
+        ),
+      ],
+    );
+  }
+
+  Widget _yearsSliver(List<AssetEntity> all) {
+    final years = groupByYear(all).entries.toList()
+      ..sort((a, b) => b.key.compareTo(a.key));
+    final months = groupByMonth(all);
+
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(12, 40, 12, 0),
+      sliver: SliverList.separated(
+        itemCount: years.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 14),
+        itemBuilder: (context, i) {
+          final year = years[i];
+          final preview = year.value.length <= 8
+              ? year.value
+              : List.generate(8, (k) => year.value[(k * year.value.length) ~/ 8]);
+          return GestureDetector(
+            onTap: () {
+              final first = months.indexWhere(
+                  (g) => g.assets.first.createDateTime.year == year.key);
+              _setZoom(Zoom.months, jumpToGroup: math.max(0, first));
+            },
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(22),
+              child: SizedBox(
+                height: 220,
+                child: Stack(fit: StackFit.expand, children: [
+                  Row(children: [
+                    Expanded(flex: 2, child: AssetThumb(preview.first, size: 500, showBadges: false)),
+                    const SizedBox(width: 2),
+                    Expanded(
+                      child: Column(children: [
+                        for (var k = 1; k < math.min(3, preview.length); k++) ...[
+                          if (k > 1) const SizedBox(height: 2),
+                          Expanded(child: AssetThumb(preview[k], showBadges: false)),
+                        ],
+                      ]),
+                    ),
+                  ]),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Colors.black54],
+                        stops: [0.5, 1],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 18,
+                    bottom: 14,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('${year.key}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 30,
+                              fontWeight: FontWeight.w600)),
+                      Text(countLabel(year.value),
+                          style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                    ]),
+                  ),
+                ]),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ZoomSwitcher extends StatelessWidget {
+  const _ZoomSwitcher({required this.value, required this.onChanged});
+  final Zoom value;
+  final ValueChanged<Zoom> onChanged;
+
+  static const _order = [Zoom.years, Zoom.months, Zoom.days, Zoom.all];
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return Glass(
+      radius: 30,
+      padding: const EdgeInsets.all(5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final z in _order)
+            GestureDetector(
+              onTap: () => onChanged(z),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                decoration: BoxDecoration(
+                  color: z == value
+                      ? (b == Brightness.light
+                          ? Colors.black.withOpacity(0.07)
+                          : Colors.white.withOpacity(0.14))
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Text(z.label,
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: z == value ? FontWeight.w600 : FontWeight.w400,
+                        color: z == value ? null : GalleryColors.subtle(b))),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+--------------------------------------
+search_screen.dart
+
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:photo_manager/photo_manager.dart';
+
+import '../data/gallery_scope.dart';
+import '../data/grouping.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+
+class SearchScreen extends StatefulWidget {
+  const SearchScreen({super.key});
+
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> {
+  final _text = TextEditingController();
+  Timer? _debounce;
+  String _query = '';
+  List<AssetEntity> _results = const [];
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String q) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () => _run(q));
+  }
+
+  void _run(String q) {
+    final repo = GalleryScope.of(context, listen: false);
+    setState(() {
+      _query = q.trim();
+      _results = _query.isEmpty ? const [] : repo.search(_query);
+    });
+  }
+
+  void _useSuggestion(String s) {
+    _text.text = s;
+    _text.selection = TextSelection.collapsed(offset: s.length);
+    _run(s);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    return Scaffold(
+      body: GradientBackground(
+        child: SafeArea(
+          bottom: false,
+          child: Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 16, 8),
+              child: Row(children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                Expanded(
+                  child: Glass(
+                    radius: 26,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: TextField(
+                      controller: _text,
+                      autofocus: true,
+                      textInputAction: TextInputAction.search,
+                      onChanged: _onChanged,
+                      onSubmitted: _run,
+                      decoration: InputDecoration(
+                        border: InputBorder.none,
+                        icon: Icon(Icons.search, color: GalleryColors.subtle(b)),
+                        hintText: 'Times, places, file names…',
+                        suffixIcon: _query.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.close),
+                                onPressed: () {
+                                  _text.clear();
+                                  _run('');
+                                },
+                              ),
+                      ),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+            Expanded(child: _query.isEmpty ? _suggestions(context) : _resultsView(context)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _resultsView(BuildContext context) {
+    final b = Theme.of(context).brightness;
+    if (_results.isEmpty) {
+      return Center(
+        child: Text('No results for “$_query”',
+            style: TextStyle(color: GalleryColors.subtle(b))),
+      );
+    }
+    return CustomScrollView(slivers: [
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+          child: Text('${_results.length} results',
+              style: TextStyle(color: GalleryColors.subtle(b))),
+        ),
+      ),
+      ...groupedGridSlivers(context, groups: groupByDay(_results), columns: 4),
+      SliverToBoxAdapter(
+          child: SizedBox(height: MediaQuery.paddingOf(context).bottom + 24)),
+    ]);
+  }
+
+  Widget _suggestions(BuildContext context) {
+    final repo = GalleryScope.of(context);
+    final monthFmt = DateFormat('MMMM yyyy');
+    final months = <String>[];
+    for (final a in repo.all) {
+      final m = monthFmt.format(a.createDateTime);
+      if (!months.contains(m)) months.add(m);
+      if (months.length == 6) break;
+    }
+
+    Widget section(String title, List<String> items, IconData icon) {
+      if (items.isEmpty) return const SizedBox.shrink();
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+          child: Text(title,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final s in items)
+              ActionChip(
+                avatar: Icon(icon, size: 18),
+                label: Text(s),
+                onPressed: () => _useSuggestion(s),
+                shape: const StadiumBorder(),
+                side: BorderSide.none,
+                backgroundColor: GalleryColors.glass(Theme.of(context).brightness),
+              ),
+          ]),
+        ),
+      ]);
+    }
+
+    return ListView(
+      padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom + 24),
+      children: [
+        section('Quick', ['Videos', 'Favorite', 'Screenshot'], Icons.bolt_outlined),
+        section('Times', months, Icons.event_outlined),
+        section('Places', [for (final p in repo.scanner.places.take(8)) p.name],
+            Icons.place_outlined),
+        section('Things', repo.scanner.tagged.keys.take(10).toList(), Icons.sell_outlined),
+        section('Albums', [for (final a in repo.albums.take(10)) a.name],
+            Icons.photo_album_outlined),
+      ],
+    );
+  }
+}
+-------------------------------------------------
+view_screen.dart
+
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:photo_view/photo_view_gallery.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:video_player/video_player.dart';
+
+import '../data/gallery_scope.dart';
+import '../widgets/common.dart';
+
+/// Full-screen swipe viewer with pinch-zoom, video playback, share,
+/// favourite, info and delete.
+class ViewerScreen extends StatefulWidget {
+  const ViewerScreen({super.key, required this.assets, required this.initialIndex});
+
+  final List<AssetEntity> assets;
+  final int initialIndex;
+
+  @override
+  State<ViewerScreen> createState() => _ViewerScreenState();
+}
+
+class _ViewerScreenState extends State<ViewerScreen> {
+  late final List<AssetEntity> _assets = List.of(widget.assets);
+  late int _index = widget.initialIndex;
+  late final PageController _page = PageController(initialPage: widget.initialIndex);
+  bool _chrome = true;
+
+  AssetEntity get _current => _assets[_index];
+
+  @override
+  void dispose() {
+    _page.dispose();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
+  }
+
+  void _toggleChrome() {
+    setState(() => _chrome = !_chrome);
+    SystemChrome.setEnabledSystemUIMode(
+        _chrome ? SystemUiMode.edgeToEdge : SystemUiMode.immersiveSticky);
+  }
+
+  Future<void> _share() async {
+    final file = await _current.file;
+    if (file == null) return;
+    await Share.shareXFiles([XFile(file.path, mimeType: _current.mimeType)]);
+  }
+
+  Future<void> _delete() async {
+    final repo = GalleryScope.of(context, listen: false);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+                'Delete this ${_current.type == AssetType.video ? 'video' : 'photo'} from your device?',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Delete'),
+              ),
+            ),
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+          ]),
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final deleted = await repo.delete([_current]);
+    if (!deleted || !mounted) return;
+    setState(() {
+      _assets.removeAt(_index);
+      if (_index >= _assets.length) _index = _assets.length - 1;
+    });
+    if (_assets.isEmpty) Navigator.of(context).pop();
+  }
+
+  Future<void> _showInfo() async {
+    final repo = GalleryScope.of(context, listen: false);
+    final a = _current;
+    final file = await a.file;
+    final size = file != null ? await file.length() : null;
+    if (!mounted) return;
+
+    final rows = <(IconData, String, String)>[
+      (Icons.insert_drive_file_outlined, 'Name', a.title ?? '—'),
+      (Icons.event_outlined, 'Date', DateFormat('EEE, d MMM yyyy · h:mm a').format(a.createDateTime)),
+      (Icons.photo_size_select_large, 'Resolution', '${a.width} × ${a.height}'),
+      if (size != null) (Icons.sd_storage_outlined, 'Size', _bytes(size)),
+      if (a.type == AssetType.video)
+        (Icons.timer_outlined, 'Duration', formatDuration(a.videoDuration)),
+      if (repo.albumNameOf(a) != null)
+        (Icons.photo_album_outlined, 'Album', repo.albumNameOf(a)!),
+      if (repo.scanner.placeNameOf(a.id) != null)
+        (Icons.place_outlined, 'Place', repo.scanner.placeNameOf(a.id)!),
+      if (repo.scanner.tagsOf(a.id).isNotEmpty)
+        (Icons.sell_outlined, 'Tags', repo.scanner.tagsOf(a.id).join(', ')),
+      if (file != null) (Icons.folder_outlined, 'Path', file.parent.path),
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (final r in rows)
+            ListTile(
+              dense: true,
+              leading: Icon(r.$1),
+              title: Text(r.$2),
+              subtitle: SelectableText(r.$3),
+            ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
+
+  static String _bytes(int b) {
+    if (b < 1024) return '$b B';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} KB';
+    if (b < 1024 * 1024 * 1024) return '${(b / 1024 / 1024).toStringAsFixed(1)} MB';
+    return '${(b / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = GalleryScope.of(context);
+    final light = Theme.of(context).brightness == Brightness.light;
+    final bg = _chrome && light ? Colors.white : Colors.black;
+    final fg = _chrome && light ? Colors.black87 : Colors.white;
+    if (_assets.isEmpty) return const SizedBox.shrink();
+    final a = _current;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: bg == Colors.white ? SystemUiOverlayStyle.dark : SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: bg,
+        body: Stack(children: [
+          PhotoViewGallery.builder(
+            pageController: _page,
+            itemCount: _assets.length,
+            backgroundDecoration: BoxDecoration(color: bg),
+            onPageChanged: (i) => setState(() => _index = i),
+            loadingBuilder: (context, _) => const SizedBox.shrink(),
+            builder: (context, i) {
+              final item = _assets[i];
+              if (item.type == AssetType.video) {
+                return PhotoViewGalleryPageOptions.customChild(
+                  disableGestures: true,
+                  child: _VideoPage(
+                    key: ValueKey(item.id),
+                    asset: item,
+                    active: i == _index,
+                    onTap: _toggleChrome,
+                  ),
+                );
+              }
+              return PhotoViewGalleryPageOptions(
+                imageProvider: AssetEntityImageProvider(item, isOriginal: true),
+                initialScale: PhotoViewComputedScale.contained,
+                minScale: PhotoViewComputedScale.contained,
+                maxScale: PhotoViewComputedScale.covered * 5,
+                onTapUp: (_, __, ___) => _toggleChrome(),
+                errorBuilder: (_, __, ___) => Center(
+                    child: AssetThumb(item, size: 800, showBadges: false)),
+              );
+            },
+          ),
+
+          // Top bar
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 200),
+            top: _chrome ? 0 : -120,
+            left: 0,
+            right: 0,
+            child: Container(
+              color: bg.withOpacity(0.85),
+              padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+              child: Row(children: [
+                IconButton(
+                  color: fg,
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(DateFormat('MMM d, yyyy').format(a.createDateTime),
+                        style: TextStyle(
+                            color: fg, fontSize: 17, fontWeight: FontWeight.w600)),
+                    Text(DateFormat('h:mm a').format(a.createDateTime),
+                        style: TextStyle(color: fg.withOpacity(0.6), fontSize: 12)),
+                  ]),
+                ),
+                Text('${_index + 1}/${_assets.length}',
+                    style: TextStyle(color: fg.withOpacity(0.6), fontSize: 12)),
+                const SizedBox(width: 16),
+              ]),
+            ),
+          ),
+
+          // Bottom actions
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 200),
+            bottom: _chrome ? 0 : -140,
+            left: 0,
+            right: 0,
+            child: Container(
+              color: bg.withOpacity(0.85),
+              padding: EdgeInsets.only(
+                  bottom: MediaQuery.paddingOf(context).bottom + 4, top: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _Action(icon: Icons.share_outlined, label: 'Send', color: fg, onTap: _share),
+                  _Action(
+                    icon: repo.isFavorite(a) ? Icons.favorite : Icons.favorite_border,
+                    label: 'Favorite',
+                    color: repo.isFavorite(a) ? Colors.redAccent : fg,
+                    onTap: () => repo.toggleFavorite(a),
+                  ),
+                  _Action(
+                      icon: Icons.delete_outline, label: 'Delete', color: fg, onTap: _delete),
+                  _Action(icon: Icons.info_outline, label: 'Details', color: fg, onTap: _showInfo),
+                ],
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _Action extends StatelessWidget {
+  const _Action({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkResponse(
+      onTap: onTap,
+      radius: 36,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, color: color),
+          const SizedBox(height: 3),
+          Text(label, style: TextStyle(color: color, fontSize: 11)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Plays a video only while its page is the active one.
+class _VideoPage extends StatefulWidget {
+  const _VideoPage({
+    super.key,
+    required this.asset,
+    required this.active,
+    required this.onTap,
+  });
+
+  final AssetEntity asset;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  State<_VideoPage> createState() => _VideoPageState();
+}
+
+class _VideoPageState extends State<_VideoPage> {
+  VideoPlayerController? _controller;
+  bool _starting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) _start();
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoPage old) {
+    super.didUpdateWidget(old);
+    if (widget.active && !old.active) _start();
+    if (!widget.active && old.active) _stop();
+  }
+
+  Future<void> _start() async {
+    if (_controller != null || _starting) return;
+    _starting = true;
+    final File? file = await widget.asset.file;
+    if (file == null || !mounted) {
+      _starting = false;
+      return;
+    }
+    final c = VideoPlayerController.file(file);
+    await c.initialize();
+    _starting = false;
+    if (!mounted || !widget.active) {
+      await c.dispose();
+      return;
+    }
+    await c.setLooping(true);
+    await c.play();
+    c.addListener(() {
+      if (mounted) setState(() {});
+    });
+    setState(() => _controller = c);
+  }
+
+  void _stop() {
+    final c = _controller;
+    _controller = null;
+    c?.dispose();
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _controller;
+    final ready = c != null && c.value.isInitialized;
+    return GestureDetector(
+      onTap: () {
+        if (ready) c.value.isPlaying ? c.pause() : c.play();
+        widget.onTap();
+      },
+      child: Stack(alignment: Alignment.center, children: [
+        if (ready)
+          Center(
+            child: AspectRatio(
+              aspectRatio: c.value.aspectRatio,
+              child: VideoPlayer(c),
+            ),
+          )
+        else
+          Center(
+            child: AspectRatio(
+              aspectRatio: widget.asset.width > 0 && widget.asset.height > 0
+                  ? widget.asset.width / widget.asset.height
+                  : 16 / 9,
+              child: AssetThumb(widget.asset, size: 800, showBadges: false),
+            ),
+          ),
+        if (ready && !c.value.isPlaying)
+          IconButton.filledTonal(
+            iconSize: 40,
+            onPressed: () => c.value.isPlaying ? c.pause() : c.play(),
+            icon: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow),
+            style: IconButton.styleFrom(
+                backgroundColor: Colors.black26, foregroundColor: Colors.white),
+          ),
+        if (ready)
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.paddingOf(context).bottom + 84,
+            child: Row(children: [
+              Text(formatDuration(c.value.position),
+                  style: const TextStyle(color: Colors.white, fontSize: 12)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: VideoProgressIndicator(
+                  c,
+                  allowScrubbing: true,
+                  colors: const VideoProgressColors(
+                    playedColor: Colors.white,
+                    bufferedColor: Colors.white38,
+                    backgroundColor: Colors.white24,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(formatDuration(c.value.duration),
+                  style: const TextStyle(color: Colors.white, fontSize: 12)),
+            ]),
+          ),
+        if (!ready && widget.active)
+          const CircularProgressIndicator(color: Colors.white),
+      ]),
+    );
+  }
+}
+-----------------------------
+
+pubsec.yaml
+
+name: gallery_app
+description: A gallery photo app.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  photo_manager: ^3.0.0
+  permission_handler: ^11.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  # On-device smart tags + face detection (no cloud)
+  google_mlkit_image_labeling: ">=0.13.0 <1.0.0"
+  google_mlkit_face_detection: ">=0.12.0 <1.0.0"
+
+  # Places (reverse geocoding of photo GPS)
+  geocoding: ^3.0.0
+
+  # Local caches / favourites
+  shared_preferences: ^2.3.0
+  path_provider: ^2.1.0
+  intl: ">=0.19.0 <1.0.0"
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+----------------------------------
+build-apk.yaml
+
+# Put this file in your repo at:  .github/workflows/build-apk.yml
+# Then: Actions tab -> "Build Android APK" -> Run workflow.
+name: Build Android APK
+
+on:
+  workflow_dispatch:      # manual "Run workflow" button
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      # Fail early (with a clear message) if the gallery code didn't get uploaded.
+      - name: Check gallery source files exist
+        run: |
+          for f in lib/main.dart lib/screens/home_shell.dart lib/data/media_repository.dart pubspec.yaml android/app/src/main/AndroidManifest.xml; do
+            if [ ! -f "$f" ]; then echo "::error::Missing $f - upload the whole gallery_app folder (lib/ and android/ included)"; exit 1; fi
+          done
+          grep -q "PermissionGate" lib/main.dart || { echo "::error::lib/main.dart is not the gallery version"; exit 1; }
+          echo "Gallery source found"
+
+      # Creates the missing Android Gradle files, then puts OUR files back
+      # (flutter create writes a default counter app / pubspec / manifest).
+      - name: Generate Android project files
+        run: |
+          mkdir -p /tmp/keep
+          cp -r lib /tmp/keep/lib
+          cp pubspec.yaml /tmp/keep/pubspec.yaml
+          cp gallery_app/gallery_app/android/app/src/main/AndroidManifest.xml /tmp/keep/AndroidManifest.xml
+          flutter create --platforms=android --org com.coresolutions .
+          rm -rf lib && cp -r /tmp/keep/lib lib
+          cp /tmp/keep/pubspec.yaml pubspec.yaml
+          cp /tmp/keep/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          grep -q PermissionGate lib/main.dart && echo "lib/main.dart is the gallery app"
+          grep -q READ_MEDIA_IMAGES android/app/src/main/AndroidManifest.xml && echo "Manifest OK"
+
+      # ML Kit and photo_manager need a minimum Android 7.0 (API 24).
+      - name: Set minSdk to 24
+        run: |
+          f=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -n1)
+          echo "Patching $f"
+          sed -i -E 's/minSdk(Version)?[[:space:]]*=?[[:space:]]*(flutter\.minSdkVersion|[0-9]+)/minSdk = 24/' "$f"
+          grep -n "minSdk" "$f"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+-----------------------------------------
+androidmanifest
+
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Android 13+ granular media permissions -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Android 14+ "selected photos" access -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <!-- Android 12 and below -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <!-- Needed to read GPS from photos for the Places section -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <!-- Reverse geocoding (place names) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Gallery"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
+        </intent>
+    </queries>
+</manifest>
+
+
+

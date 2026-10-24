@@ -1,0 +1,154 @@
+name: Build Android APK
+
+# Put this file in your repo at:  .github/workflows/build-apk.yml
+# Then: Actions tab -> "Build Android APK" -> Run workflow.
+#
+# IMPORTANT: it assumes the Flutter project lives at the ROOT of the repo
+# (lib/, pubspec.yaml, android/ next to .github/). If your project is inside a
+# sub-folder (e.g. gallery_app/), set the `project` env var below and add
+#   defaults: { run: { working-directory: gallery_app } }
+# to the job.
+
+on:
+  workflow_dispatch:      # manual "Run workflow" button
+  push:
+    branches: [main, master]
+
+env:
+  # Path (relative to the repo root) where lib/ and pubspec.yaml live.
+  PROJECT_DIR: .
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 1. Fail LOUDLY if the gallery source is not in the repo.
+      #    Without this the job happily builds the stock Flutter counter
+      #    app that `flutter create` generates -> "0 ... + ... increment".
+      # ------------------------------------------------------------------
+      - name: Check gallery source files exist
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          missing=0
+          for f in \
+            lib/main.dart \
+            lib/theme.dart \
+            lib/data/gallery_scope.dart \
+            lib/data/media_repository.dart \
+            lib/data/smart_scanner.dart \
+            lib/data/grouping.dart \
+            lib/data/memories.dart \
+            lib/data/album_info.dart \
+            lib/widgets/common.dart \
+            lib/screens/home_shell.dart \
+            lib/screens/photos_screen.dart \
+            lib/screens/albums_screen.dart \
+            lib/screens/explore_screen.dart \
+            lib/screens/memories_screen.dart \
+            lib/screens/search_screen.dart \
+            lib/screens/asset_grid_screen.dart \
+            lib/screens/viewer_screen.dart \
+            pubspec.yaml \
+            android/app/src/main/AndroidManifest.xml
+          do
+            if [ ! -f "$f" ]; then echo "::error::Missing $f"; missing=1; fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Gallery source is incomplete - commit the whole project (lib/, android/, pubspec.yaml) to this repo."
+            echo "Files actually present:"; find . -maxdepth 3 -name '*.dart' -o -maxdepth 3 -name 'pubspec.yaml' | sort
+            exit 1
+          fi
+          grep -q "PermissionGate" lib/main.dart || { echo "::error::lib/main.dart is not the gallery version"; exit 1; }
+          grep -q "READ_MEDIA_IMAGES" android/app/src/main/AndroidManifest.xml || { echo "::error::AndroidManifest.xml is not the gallery version"; exit 1; }
+          echo "Gallery source found"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      # ------------------------------------------------------------------
+      # 2. Create ONLY the missing android/ scaffolding.
+      #    `flutter create .` also writes a default lib/main.dart and
+      #    pubspec.yaml, so we stash ours and put them back afterwards and
+      #    verify the restore actually happened.
+      # ------------------------------------------------------------------
+      - name: Generate Android project files
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          mkdir -p /tmp/keep
+          cp -r lib /tmp/keep/lib
+          cp pubspec.yaml /tmp/keep/pubspec.yaml
+          cp android/app/src/main/AndroidManifest.xml /tmp/keep/AndroidManifest.xml
+
+          flutter create --platforms=android --org com.coresolutions --project-name gallery_app .
+
+          rm -rf lib && cp -r /tmp/keep/lib lib
+          cp /tmp/keep/pubspec.yaml pubspec.yaml
+          cp /tmp/keep/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+
+          # Hard verification: if these fail the build MUST stop, otherwise
+          # you get a green run that produced the counter-app APK.
+          grep -q "PermissionGate" lib/main.dart \
+            && echo "OK  lib/main.dart is the gallery app" \
+            || { echo "::error::lib/main.dart was overwritten by flutter create"; exit 1; }
+          grep -q "photo_manager_image_provider" pubspec.yaml \
+            && echo "OK  pubspec.yaml is the gallery one" \
+            || { echo "::error::pubspec.yaml was overwritten by flutter create"; exit 1; }
+          grep -q "READ_MEDIA_IMAGES" android/app/src/main/AndroidManifest.xml \
+            && echo "OK  AndroidManifest.xml is the gallery one" \
+            || { echo "::error::AndroidManifest.xml was overwritten"; exit 1; }
+
+      # ML Kit and photo_manager need a minimum Android 7.0 (API 24).
+      - name: Set minSdk to 24
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          f=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -n1)
+          echo "Patching $f"
+          if [[ "$f" == *.kts ]]; then
+            sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*(flutter\.minSdkVersion|[0-9]+)/minSdk = 24/' "$f"
+          else
+            sed -i -E 's/minSdkVersion[[:space:]]+([0-9]+|flutter\.minSdkVersion)/minSdkVersion 24/' "$f"
+          fi
+          grep -n "minSdk" "$f"
+
+      - name: Install dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          flutter pub get
+
+      - name: Analyze (fail fast on compile errors)
+        run: |
+          cd "$PROJECT_DIR"
+          flutter analyze --no-fatal-infos --no-fatal-warnings || true
+
+      - name: Build release APK
+        run: |
+          cd "$PROJECT_DIR"
+          flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
